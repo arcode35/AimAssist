@@ -1,4 +1,4 @@
-# Game Enhancement Script README
+# AimAssist
 
 ## Description
 
