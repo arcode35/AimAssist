@@ -1,5 +1,4 @@
 local turretPositionAddress = nil
-local isScanning = true
 local ownBaseAddress = nil
 local YOffset = 0xC
 local ZOffset = 0x18
@@ -8,10 +7,7 @@ local tankOrientationOffset = 0x30
 local redHighlightAddress = nil
 local enemyZAddresses = {}
 local isInitialized = true
-
-local MAX_REALISTIC_DISTANCE = 10000
-
-local previousCoordinates = {} -- to store the previous coordinates of enemies for the "no longer written to" check
+local previousCoordinates = {}
 
 function getTurretAddress()
     print("Searching for turret address...")
