@@ -54,3 +54,7 @@ This Lua script is designed to assist in gameplay by providing various features 
 
 1. Start the script.
 2. Use the designated hotkeys to toggle features on and off.
+3. 
+## Ethical Usage Disclaimer
+
+This script is intended for educational purposes and personal use only. It should not be used to exploit or harm others, or to gain an unfair advantage in competitive gaming environments. Unauthorized use of this script may violate game terms of service or local laws. Please use responsibly.
