@@ -9,7 +9,7 @@ local redHighlightAddress = nil
 local enemyZAddresses = {}
 local isInitialized = true
 
-local MAX_REALISTIC_DISTANCE = 10000 -- Adjust this value based on the game world size or max expected coordinate value
+local MAX_REALISTIC_DISTANCE = 10000
 
 local previousCoordinates = {} -- to store the previous coordinates of enemies for the "no longer written to" check
 
