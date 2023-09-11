@@ -1,19 +1,15 @@
 local turretPositionAddress = nil
-local ownBaseAddress = nil
-local YOffset = 0xC
-local XOffset = 0x18
-local tankOrientationAddress = nil
-local tankOrientationOffset = 0x30
 local redHighlightAddress = nil
-local enemyZAddresses = {}
-local isInitialized = true
-local previousCoordinates = {}
-
+local highlightInstructionAddress = nil
+local isNopped = false
+local oldBytes = {}
+local validAimAddresses = {}
 function getTurretAddress()
+
     print("Searching for turret address...")
-    -- Multiple signatures to retrieve our own turret address more consistently.
     local turretSignatures = {
-        { pattern = "c4 c1 7b ? ? 03 45 ? 64 24 ? 4d 03 e6 c4 c1 7b ? ? 24 ? 49 bc", offset = 0x3, jump = 0x0, register = "R15" },
+        { pattern = "c5 fb 10 47 ? 8b 7a ? 49 03 fe c5 fb 10 4f ? 48 bf", offset = 0x3, jump = 0x0, register = "RDI" },
+        { pattern = "c4 c1 7b ? ? 03 45 ? 64 24 ? 4d 03 e6 c4 c1 7b ? ? 24 ? 49 bc", offset = 0x3, jump = 0x0, register = "R15"},
         { pattern = "c4 c1 73 ? ? 03 c5 fb 2c", offset = 0x3, jump = 0x0, register = "R8" },
         { pattern = "c4 c1 7b ? ? 03 44 8b ? 27 4d 03 c6 c4 c1 7b ? ? 03 44 8b", offset = 0x3, jump = 0xD, register = "R8" },
         { pattern = "c5 f9 2e d9 0f 8a 1c 00 00 00 0f 85 ? ? ? ? 41 83 f9 ? 0f 84 ? ? ? ? 49 8b c1", offset = 0x6, jump = 0xF, register = "RCX" },
@@ -21,22 +17,29 @@ function getTurretAddress()
     }
 
     local turretInstructionAddress = nil
+    local isBreakpointHit = false
+    local breakpointTimeout = 500  -- 500 milliseconds
 
     for _, signature in ipairs(turretSignatures) do
+        isBreakpointHit = false  -- Reset the flag for each signature
         local results = AOBScan(signature.pattern)
         if results ~= nil then
             turretInstructionAddress = getAddress(stringlist_getString(results, 0)) + signature.jump
-            print("Found turret instruction address: " .. string.format("0x%X", turretInstructionAddress))
-
-            -- Set the breakpoint
-            debug_setBreakpoint(
+            print(string.format("Found turret instruction address: 0x%x", turretInstructionAddress))
+            local breakpointId = debug_setBreakpoint(
                 turretInstructionAddress,
                 function()
+                    isBreakpointHit = true
+                    if (isBreakpointHit) then
+                        print("Breakpoint hit.")
+                    end
                     local potentialAddress = nil
                     if signature.register == "R11" then
                         potentialAddress = R11 + signature.offset
                     elseif signature.register == "RCX" then
                         potentialAddress = RCX + signature.offset
+                    elseif signature.register == "RDI" then
+                        potentialAddress = RDI + signature.offset
                     elseif signature.register == "RDX" then
                         potentialAddress = RDX + signature.offset
                     elseif signature.register == "R8" then
@@ -48,17 +51,36 @@ function getTurretAddress()
                     end
 
                     -- Check if the value at the potential address is 0
-                    if readDouble(potentialAddress) == 0 then
+                    if (readDouble(potentialAddress) == 0) then
+                        print(string.format("Found a potential address: 0x%X", potentialAddress))
                         turretPositionAddress = potentialAddress
+                        print(string.format("Setting turret address: 0x%X", turretPositionAddress))
+
                         debug_removeBreakpoint(turretInstructionAddress)  -- Remove the breakpoint after capturing the turretPositionAddress
-                        print("Turret position address set to: " .. string.format("0x%X", turretPositionAddress))
-                        isInitialized = true
                     end
                 end
             )
+            print(string.format("Turret position address set to: %x", turretPositionAddress))
+            isInitialized = true
+            local timerId = createTimer(nil, false)
+            timer_setInterval(timerId, breakpointTimeout)
+            timer_onTimer(timerId, function()
+                if not isBreakpointHit then
+                    print(string.format("Breakpoint at 0x%x not hit. Moving to next.", turretInstructionAddress))
+                    debug_removeBreakpoint(breakpointId)
+                    timerId.destroy()
+                    timerId = nil
+                else
+                    print("Breakpoint hit. Stopping timer.")
+                    timerId.destroy()
+                    timerId = nil
+                end
+            end)
+            timer_setEnabled(timerId, true)
 
-            -- Break out of the loop as we have found a match
-            break
+            if isBreakpointHit then
+                break  -- Found a valid breakpoint, so exit the loop
+            end
         end
     end
 
@@ -67,273 +89,193 @@ function getTurretAddress()
     end
 end
 
+function esp()
+
+    if (isNopped) then
+        writeBytes(highlightInstructionAddress, oldBytes)
+        isNopped = false
+        return
+    end
+    if (highlightInstructionAddress == nil) then
+        print("Couldn't find the ESP signature.")
+        return
+    end
+   --print(string.format("Found address at: %x", highlightInstructionAddress))
+    local numBytes = getInstructionSize(highlightInstructionAddress)
+    --print(string.format("The size of the instruction is: %d", numBytes))
+    oldBytes = readBytes(highlightInstructionAddress, numBytes, true)
+    local t = {}
+    for i = 1, numBytes, 1 do
+        t[i] = 0x90
+    end
+
+    writeBytes(highlightInstructionAddress, t)
+    isNopped = true
+end
+
+
+
 
 function getRedScan()
-    print("Searching for the red highlight scan...");
+
+    print("Searching for the red highlight scan...")
     local results = AOBScan("45 8b 40 ? 4c 8b 4d ? 45 8b 59 ? 4d 03 de 41 bc ? ? ? ? 45 39 e3 0f 85 ? ? ? ? 45 8b 59")
     if (results == nil) then
         print("Couldn't find the red highlight signature.")
         return
     end
-    redHighlightResults = getAddress(stringlist_getString(results, 0))
-
-    debug_setBreakpoint(
-        redHighlightResults,
-        function()
-            redHighlightAddress = R8 + 0x33
-
-            print("Red highlight address set to: " .. string.format("0x%X", redHighlightAddress))
-
-            -- Optional: If you only want to find the own Z-coordinate once, you can remove the breakpoint here.
-            debug_removeBreakpoint(redHighlightResults)
-        end
-    )
-
+    local breakpointHitCount = 0  -- Counter to keep track of the number of times the breakpoint is hit
+    local maxHits = 4
+    highlightInstructionAddress = getAddress(stringlist_getString(results, 0))
+    if (highlightInstructionAddress ~= nil) then
+       print(string.format("Found highlight instruction address: %0X", highlightInstructionAddress))
+    end
 end
 
-function updateOwnCoordinates()
-    print("Scanning for own Z-coordinate...")
-    local ZOwnResults = AOBScan("F3 0F 7E 46 10 F2 0F 59 C1 8B 42 58 85 C0")
-    if (ZOwnResults == nil) then
-        print("Couldn't find the own Z-coordinate signature.")
+function getRedHighlight()
+    if (highlightInstructionAddress == nil) then
+        print("Couldn't find the red highlight instruction address")
         return
     end
 
-    local ownZInstructionAddress = getAddress(stringlist_getString(ZOwnResults, 0)) -- Adjust the offset if needed.
-    print("Found own Z-coordinate instruction address: " .. string.format("0x%X", ownZInstructionAddress))
-
-    debug_setBreakpoint(
-        ownZInstructionAddress,
-        function()
-            ownBaseAddress = ESI + 0x10
-
-            print("Own Z-coordinate base address set to: " .. string.format("0x%X", ownBaseAddress))
-
-            -- Optional: If you only want to find the own Z-coordinate once, you can remove the breakpoint here.
-            debug_removeBreakpoint(ownZInstructionAddress)
+    local maxHits = 30
+    local breakpointHitCount = 0
+    print("Obtaining the IG Aimbot value.. Make sure that you are aiming at someone")
+    local IGAimbotAddr = nil
+    local breakPointId = debug_setBreakpoint(highlightInstructionAddress, function()
+        breakpointHitCount = breakpointHitCount + 1
+        IGAimbotAddr = R8 + 0x33
+        if (readBytes(IGAimbotAddr, 1, true)[1] == 193) then
+            print(string.format("Captured a potential aimbot address: %0X", IGAimbotAddr))
+            table.insert(validAimAddresses, IGAimbotAddr)
         end
+        if (breakpointHitCount >= 30) then
+            print("Breakpoint hit count exceeded. Ending the breakpoint.")
+            debug_removeBreakpoint(highlightInstructionAddress)
+        end
+    end
     )
 end
 
-function isValidCoordinate(x, y)
-    if not isInitialized then
-        print("Initialization is not complete yet. Please wait...")
-        return
+
+
+function aimAssist()
+    -- Debug: Print all addresses in validAimAddresses
+    for i, address in ipairs(validAimAddresses) do
+        print(string.format("Address %d: 0x%X", i, address))
     end
 
-    local playerX = readDouble(ownBaseAddress - XOffset)
-    local playerY = readDouble(ownBaseAddress - YOffset)
-    local deltaX = math.abs(x - playerX)
-    local deltaY = math.abs(y - playerY)
-
-    if (deltaX < 0.1 or deltaY < 0.1) then
-        return false
+    -- Debug: Check if turretPositionAddress and redHighlightAddress are initialized
+    if turretPositionAddress == nil or redHighlightAddress == nil then
+        print("Error: Turret position or red highlight address not initialized.")
+        return
     else
-        return true
+        print(string.format("Turret Position: 0x%X, Red Highlight: 0x%X", turretPositionAddress, redHighlightAddress))
     end
 
+for i, address in ipairs(validAimAddresses) do
+    local redHighlightValueTable = readBytes(address, 1, true)
+    if redHighlightValueTable then
+        local redHighlightValue = redHighlightValueTable[1]
+              print(redHighlightValue);
+    end
 end
-function updateEnemyCoordinates()
-    -- Logic to periodically scan and update enemy Z-coordinates
-    local ZResults = AOBScan("4d 03 de c4 c1 7b ? ? 03 c5 e3 ? d2 c4")
-    if (ZResults == nil) then
-        print("Couldn't find the enemy's Z coordinate signature")
+
+    if turretPositionAddress == nil or redHighlightAddress == nil then
+        print("Error: Turret position or red highlight address not initialized.")
         return
     end
 
-    local enemyZInstruction = getAddress(stringlist_getString(ZResults, 0)) + 0x3
+    local currentTurretPosition = readDouble(turretPositionAddress)
+    local step = 0.00005  -- Incremental step for scanning; you can adjust this as needed
+    local targetFound = false
 
-    debug_setBreakpoint(
-        enemyZInstruction,
-        function()
-            local currentAddress = R11 + 3
-            local enemyX = readDouble(currentAddress - XOffset)
-            local enemyY = readDouble(currentAddress - YOffset)
+    local radians15 = 10 * (math.pi / 180)  -- 15 degrees converted to radians
 
-            -- Validate coordinates
-            if not isValidCoordinate(enemyX, enemyY) then
-                -- Check if this problematic address is in the list and remove it
-                for index, addr in ipairs(enemyZAddresses) do
-                    if addr == currentAddress then
-                        table.remove(enemyZAddresses, index)
-                        break
-                    end
-                end
+    --print("Starting aim assist from position: " .. currentTurretPosition)
 
-                -- If this problematic address isn't in the previousCoordinates list, add it
-                local alreadyExistsInPrevious = false
-                for _, addr in ipairs(previousCoordinates) do
-                    if addr == currentAddress then
-                        alreadyExistsInPrevious = true
-                        break
-                    end
-                end
+    -- Scan 15 degrees (0.2618 radians) to the left
+    for angle = currentTurretPosition, currentTurretPosition - radians15, -step do
+        writeDouble(turretPositionAddress, angle)
+        local redHighlightValue = readBytes(validAimAddresses[1], 1, true)[1]
 
-                if not alreadyExistsInPrevious then
-                    table.insert(previousCoordinates, currentAddress)
-                    print("Added problematic address to previousCoordinates: " .. string.format("0x%X", currentAddress))
-                end
+        --print("Debug: redHighlightValue is " .. tostring(redHighlightValue))  -- Debug print
 
-                return
-            end
+        if redHighlightValue == 193 then
+           -- print("Target locked at angle: " .. angle)
+            targetFound = true
+            break
+        end
+    end
 
-            -- Check if this address is already in the enemyZAddresses table
-            local alreadyExists = false
-            for _, addr in ipairs(enemyZAddresses) do
-                if addr == currentAddress then
-                    alreadyExists = true
-                    break
-                end
-            end
 
-            -- If it's a new address, and not in the problematic list, add it to the enemyZAddresses list
-            if not alreadyExists then
-                table.insert(enemyZAddresses, currentAddress)
+    -- If target is not found, scan 15 degrees (0.2618 radians) to the right
+    if not targetFound then
+        for angle = currentTurretPosition, currentTurretPosition + radians15, step do
+            writeDouble(turretPositionAddress, angle)
+            local redHighlightValueTable = readBytes(validAimAddresses, 1, true)
+            local redHighlightValue = redHighlightValueTable[1]
+
+
+
+            --print("Debug: redHighlightValue is " .. tostring(redHighlightValue))  -- Debug print
+
+            if redHighlightValue == 193 then
+                --print("Target locked at angle: " .. angle)
+                targetFound = true
+                break
             end
         end
-    )
-end
+    end
 
-
--- Call this function periodically (e.g., every 30 seconds) to prune addresses that no longer update
-function pruneStaleAddresses()
-    for i = #enemyZAddresses, 1, -1 do
-        local addr = enemyZAddresses[i]
-        local currentX = readDouble(addr - XOffset)
-        local currentY = readDouble(addr - YOffset)
-
-        if previousCoordinates[addr] and previousCoordinates[addr].x == currentX and previousCoordinates[addr].y == currentY then
-            table.remove(enemyZAddresses, i)
-        else
-            previousCoordinates[addr] = {x = currentX, y = currentY}
-        end
+    if not targetFound then
+        --print("No target found within 15 degrees.")
     end
 end
 
 
-function aimLock()
-    if not isInitialized then
-        print("Initialization is not complete yet. Please wait...")
-        return
+
+function checkForKeyPressH()
+    local VK_LSHIFT = 0xA0  -- Aim Assist
+    local VK_CTRL = 0xA2 -- ESP
+    if isKeyPressed(VK_LSHIFT) then
+        aimAssist()
     end
-
-    if not turretPositionAddress or not ownBaseAddress then
-        print("Error: Turret or player coordinates not yet initialized!")
-        return
-    end
-
-    -- Get the player's coordinates
-    local ownX = readDouble(ownBaseAddress - XOffset)
-    local ownY = readDouble(ownBaseAddress - YOffset)
-
-    -- Initialize to track the closest enemy
-    local closestDistance = math.huge
-    local closestEnemy = nil
-
-    -- Loop through the enemy addresses to find the closest one
-    for _, enemyAddress in ipairs(enemyZAddresses) do
-        local enemyX = readDouble(enemyAddress - XOffset)
-        local enemyY = readDouble(enemyAddress - YOffset)
-        local distance = math.sqrt((enemyX - ownX)^2 + (enemyY - ownY)^2)
-
-        -- Proximity check to skip ourselves
-        if distance < 1 then
-            return
-        end
-
-        if distance < closestDistance then
-            closestDistance = distance
-            closestEnemy = {x = enemyX, y = enemyY}
-        end
-    end
-
-    if not closestEnemy then
-        print("No enemies found.")
-        return
-    end
-
-    -- Calculate the angle to the closest enemy
-    local deltaX = closestEnemy.x - ownX
-    local deltaY = closestEnemy.y - ownY
-    local angle = -math.atan2(deltaY, deltaX)
-
-    -- Write the calculated angle to the turret's position
-    tankOrientationAddress = ownBaseAddress + tankOrientationOffset
-    local tankOrientationAngle = 2 * math.acos(tankOrientationAddress)
-    angle = angle - tankOrientationAngle
-    writeDouble(turretPositionAddress, angle)
-end
-
-
-function printEnemyCoordinates()
-    if #enemyZAddresses == 0 then
-        print("No enemy coordinates captured yet.")
-        return
-    end
-
-    print("Number of enemies: " .. #enemyZAddresses)
-
-    print("Captured enemy coordinates:")
-    for _, enemyAddress in ipairs(enemyZAddresses) do
-        local enemyX = readDouble(enemyAddress - XOffset)
-        local enemyY = readDouble(enemyAddress - YOffset)
-        print(string.format("Enemy at (X: %f, Y: %f)", enemyX, enemyY))
+    if isKeyPressed(VK_CTRL) then
+        esp()
     end
 end
 
 function checkForKeyPress()
-    local VK_LSHIFT = 0xA0 
-    local VK_TAB = 0x09 
+    local VK_1 = 0x31  -- ASCII for "1"
+    local VK_2 = 0x32  -- ASCII for "2"
 
-    if isKeyPressed(VK_LSHIFT) then
-        aimLock()
-    elseif isKeyPressed(VK_TAB) then
-        printEnemyCoordinates()
+    if isKeyPressed(VK_1) then
+        getTurretAddress()
+    end
+
+    if isKeyPressed(VK_2) then
+        getRedHighlight()
     end
 end
 
-function setupHotkeyWithTimer()
-    local timerInterval = 100  -- Check every 100ms
+function setUpScanningTimer()
+    local timerInterval = 300  -- Check every 300ms
     timerObj = createTimer(nil)
     timer_onTimer(timerObj, checkForKeyPress)
     timer_setInterval(timerObj, timerInterval)
     timer_setEnabled(timerObj, true)
 end
 
-function setupEnemyCoordinateUpdateTimer()
-    local updateInterval = 240000  -- 30 seconds in milliseconds
-    coordUpdateTimer = createTimer(nil)
-    timer_onTimer(coordUpdateTimer, function()
-        updateEnemyCoordinates()
-        pruneStaleAddresses()  -- Prune stale addresses after updating the enemy coordinates
-    end)
-    timer_setInterval(coordUpdateTimer, updateInterval)
-    timer_setEnabled(coordUpdateTimer, true)
-end
-
-
-function setupOwnCoordinateUpdateTimer()
-    local updateInterval = 240000  -- 30 seconds in milliseconds
-    ownZUpdateTimer = createTimer(nil)
-    timer_onTimer(ownZUpdateTimer, updateOwnCoordinates)
-    timer_setInterval(ownZUpdateTimer, updateInterval)
-    timer_setEnabled(ownZUpdateTimer, true)
-end
-
-function setupTurretUpdateTimer()
-    local updateInterval = 240000  -- 120 seconds in milliseconds (2 minutes)
-    turretUpdateTimer = createTimer(nil)
-    timer_onTimer(turretUpdateTimer, getTurretAddress)
-    timer_setInterval(turretUpdateTimer, updateInterval)
-    timer_setEnabled(turretUpdateTimer, true)
+function setupHotkeyWithTimer()
+    local timerInterval = 200 -- Check every 50ms
+    timerObj = createTimer(nil)
+    timer_onTimer(timerObj, checkForKeyPressH)
+    timer_setInterval(timerObj, timerInterval)
+    timer_setEnabled(timerObj, true)
 end
 
 -- Start script execution
-print("Starting script...")
-getTurretAddress()
-updateOwnCoordinates()
-updateEnemyCoordinates()
-printEnemyCoordinates()
-setupOwnCoordinateUpdateTimer()
-setupEnemyCoordinateUpdateTimer()
+getRedScan()
+setUpScanningTimer()
 setupHotkeyWithTimer()
