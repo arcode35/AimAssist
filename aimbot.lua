@@ -1,7 +1,7 @@
 local turretPositionAddress = nil
 local ownBaseAddress = nil
 local YOffset = 0xC
-local ZOffset = 0x18
+local XOffset = 0x18
 local tankOrientationAddress = nil
 local tankOrientationOffset = 0x30
 local redHighlightAddress = nil
@@ -105,9 +105,9 @@ function updateOwnCoordinates()
     debug_setBreakpoint(
         ownZInstructionAddress,
         function()
-            ownBaseAddress = ESI + 0x10 -- This assumes the base address for the player is in the R11 register. Adjust if needed.
+            ownBaseAddress = ESI + 0x10
 
-            print("Own X-coordinate base address set to: " .. string.format("0x%X", ownBaseAddress))
+            print("Own Z-coordinate base address set to: " .. string.format("0x%X", ownBaseAddress))
 
             -- Optional: If you only want to find the own Z-coordinate once, you can remove the breakpoint here.
             debug_removeBreakpoint(ownZInstructionAddress)
@@ -259,7 +259,7 @@ function aimLock()
 
     -- Write the calculated angle to the turret's position
     tankOrientationAddress = ownBaseAddress + tankOrientationOffset
-    local tankOrientationAngle = 2 * (math.acos(readDouble(tankOrientationAddress))))
+    local tankOrientationAngle = 2 * math.acos(tankOrientationAddress)
     angle = angle - tankOrientationAngle
     writeDouble(turretPositionAddress, angle)
 end
