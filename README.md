@@ -1,5 +1,6 @@
 # AimAssist
-This project is a proof-of-concept aimbot designed to provide insights into the techniques and algorithms that power aiming assistance in video games. The aimbot is created with a focus on ethical research, aiming to further the understanding of aimbot mechanics and challenge detection algorithms.
+This project is a proof-of-concept aimbot designed to provide insights into the techniques and algorithms that power aiming assistance in video games.
+he aimbot is created with a focus on ethical research, aiming to further the understanding of aimbot mechanics and challenge detection algorithms.
 **Features**
 
 **Address Scanning**: Scans the game's memory to find the addresses corresponding to certain features like turret position, enemy coordinates, and more.
