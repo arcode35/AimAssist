@@ -190,7 +190,7 @@ end
     local step = 0.00005  -- Incremental step for scanning; you can adjust this as needed
     local targetFound = false
 
-    local radians15 = 10 * (math.pi / 180)  -- 15 degrees converted to radians
+    local radians15 = 15 * (math.pi / 180)  -- 15 degrees converted to radians
 
     --print("Starting aim assist from position: " .. currentTurretPosition)
 
