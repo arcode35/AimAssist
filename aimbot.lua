@@ -268,7 +268,7 @@ function setUpScanningTimer()
 end
 
 function setupHotkeyWithTimer()
-    local timerInterval = 200 -- Check every 50ms
+    local timerInterval = 300 -- Check every 300ms
     timerObj = createTimer(nil)
     timer_onTimer(timerObj, checkForKeyPressH)
     timer_setInterval(timerObj, timerInterval)
