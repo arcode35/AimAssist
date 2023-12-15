@@ -1,59 +1,54 @@
-# AimAssist
+# Aimbot
 
-## Description
+This guide explains the various functions in the game hacking script. The script includes functions to retrieve and manipulate game data such as player and enemy coordinates, turret orientation, and implementing an aimbot feature.
 
-This Lua script is designed to assist in gameplay by providing various features like aim assist, enemy highlighting (ESP), and dynamically finding memory addresses related to the game's internal state. It employs advanced techniques like AOB (Array of Bytes) scanning, breakpoint setting, and direct memory manipulation.
+## Functions
 
----
+### `getOwnCoordinates()`
+- Scans for the player's Z-coordinate.
+- Sets up a breakpoint to retrieve the X-coordinate base address.
 
-## Features
+### `getEnemyCoordinates()`
+- Clears and updates the `enemyCoordinates` table.
+- Scans for enemy Z-coordinate signatures.
+- Sets a breakpoint to capture enemy coordinates and stores them.
 
-### Aim Assist
+### `getTurretAddress()`
+- Searches for the turret signature in the game memory.
+- Retrieves and stores the turret address.
 
-- Automatically adjusts the player's aim toward a target within a 15-degree cone.
-- Uses real-time memory scanning to lock onto the closest enemy.
+### `getTankOrientation()`
+- Scans for the tank's orientation signature.
+- Retrieves and stores the tank's orientation address.
 
-### ESP (Enemy Highlight)
+### `printEnemies()`
+- Prints the coordinates and distances of all detected enemies.
 
-- Highlights enemies in the game world.
-- Allows for toggling the ESP on and off via a hotkey.
+### `normalize_angle(angle_in_radians)`
+- Normalizes an angle to the range [-π, π].
 
-### Dynamic Address Finding
+### `srtByDistance()`
+- Sorts enemies by distance from the player.
 
-- Scans the game memory to find the addresses for the player's turret position and enemy highlighting.
-- Multiple signatures are used to increase the reliability of address finding.
+### `calcAngle(currentEnemyIndex)`
+- Calculates the angle to the current enemy based on the player's orientation.
 
----
+### `aimbot()`
+- Implements the aimbot functionality by adjusting the turret's orientation.
 
-## How it Works
+### `checkForKeyPress()`
+- Checks for specific key presses to trigger the aimbot or cycle through enemies.
 
-### Variables
+### `setupTimers()`
+- Sets up timers for continuous execution of certain functions like `checkForKeyPress`.
 
-- `turretPositionAddress`: Holds the memory address for the player's turret position.
-- `redHighlightAddress`: Holds the memory address where enemies are highlighted.
-- `highlightInstructionAddress`: Holds the address for the instruction responsible for enemy highlighting.
-- `isNopped`: Flag to indicate if the ESP instruction has been replaced with NOPs.
-- `oldBytes`: Holds the original bytes of the ESP instruction.
-- `validAimAddresses`: A list to store addresses that have a valid aim assist value.
+## Usage
 
-### Functions
+1. Call `getTankOrientation()`, `getOwnCoordinates()`, `getEnemyCoordinates()`, and `getTurretAddress()` to initialize the script.
+2. Use `setupTimers()` to start the keypress check loop.
+3. In-game, use the designated keys to activate the aimbot or cycle through enemies.
 
-- `getTurretAddress()`: Scans the game's memory to find and set `turretPositionAddress`.
-- `esp()`: Toggles the ESP feature on and off.
-- `getRedScan()`: Finds the instruction responsible for enemy highlighting.
-- `getRedHighlight()`: Captures addresses that have a valid aim assist value.
-- `aimAssist()`: Performs the aim assist logic.
-- `checkForKeyPressH()`: Checks for hotkey presses related to aim assist and ESP.
-- `checkForKeyPress()`: Checks for hotkey presses related to address scanning.
-- `setUpScanningTimer()`: Sets up a timer to periodically scan for addresses.
-- `setupHotkeyWithTimer()`: Sets up a timer to check for hotkey presses.
+## Notes
 
----
-
-## How to Use
-
-1. Start the script.
-2. Use the designated hotkeys to toggle features on and off.
-## Ethical Usage Disclaimer
-
-This script is intended for educational purposes and personal use only. It should not be used to exploit or harm others, or to gain an unfair advantage in competitive gaming environments. 
+- This script is intended for educational purposes and understanding game mechanics.
+- The effectiveness and safety of using such scripts in online games vary and might lead to bans or other penalties.
