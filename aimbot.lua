@@ -1,281 +1,291 @@
-local turretPositionAddress = nil
-local redHighlightAddress = nil
-local highlightInstructionAddress = nil
-local isNopped = false
-local oldBytes = {}
-local validAimAddresses = {}
+local ownBaseAddress = nil
+local enemyCoordinates = {}
+local seenAddresses = {}
+local distanceTable = {}
+local turretAddress = nil
+local tankOrientationAddress = nil
+local sinOrientationAddress = nil
+local YOffset = 0x8
+local ZOffset = 0x10
+local currentEnemyIndex = 1
+
+function getOwnCoordinates()
+    print("Scanning for own Z-coordinate...")
+    local xResults = AOBScan("F3 0F 7E 46 10 F2 0F 59 C1 8B 42 58")
+
+    if xResults == nil then
+        print("Couldn't find the own Z-coordinate signature.")
+        return
+    end
+
+    local ownZInstruction = getAddress(stringlist_getString(xResults, 0))
+    print("Found own Z-coordinate instruction address: " .. string.format("0x%X", ownZInstruction))
+
+    debug_setBreakpoint(ownZInstruction, function()
+        ownBaseAddress = ESI + 0x10
+        print("Own X-coordinate base address set to: " .. string.format("0x%X", ownBaseAddress))
+        debug_removeBreakpoint(ownZInstruction)
+    end)
+end
+
+
+function getEnemyCoordinates()
+  for k in pairs(enemyCoordinates) do
+        enemyCoordinates[k] = nil
+    end
+
+    print("Scanning for enemy coordinates...")
+    local exResults = AOBScan("F3 0F 7E 46 10 F2 0F 59 C1 8B 42 58")
+
+    if exResults == nil then
+        print("Couldn't find enemy Z coordinate signature.")
+        return
+    end
+
+    local enemyZInstruction = getAddress(stringlist_getString(exResults, 0))
+    print("Found enemy X-coordinate instruction address: " .. string.format("0x%X", enemyZInstruction))
+
+    local breakPointHitCount = 0
+    debug_setBreakpoint(enemyZInstruction, function()
+        breakPointHitCount = breakPointHitCount + 1
+
+        local enemyXAddress = ESI + 0x10 
+
+        if breakPointHitCount < 30 and enemyXAddress ~= ownBaseAddress and not seenAddresses[enemyXAddress] then
+            local enemyYAddress = enemyXAddress + YOffset
+            local enemyZAddress = enemyXAddress + ZOffset
+            local x = readDouble(enemyXAddress)
+            local y = readDouble(enemyYAddress)
+            local z = readDouble(enemyZAddress)
+            -- Insert the coordinates as a table into the enemyCoordinates table
+            table.insert(enemyCoordinates, {enemyXAddress, enemyYAddress, enemyZAddress})
+
+            seenAddresses[enemyXAddress] = true
+
+            print("Retrieved an enemy coordinate: " .. string.format("(%f, %f, %f), 0x%X", x, y, z, enemyXAddress))
+        end
+
+        if (breakPointHitCount >= 30) then
+           debug_removeBreakpoint(enemyZInstruction)
+        end
+    end)
+    end
+
+
 function getTurretAddress()
+    print("Scanning for turret signature...")
+    local tResults = AOBScan("f3 0f 7e 49 ? 66 0f d6 49")
+    if (tResults == nil) then
+        print("Couldn't find the turret signature.")
+        return
+    end
+    local tInstruction = getAddress(stringlist_getString(tResults, 0))
+    print("Found turret instruction address: " .. string.format("0x%X", tInstruction))
 
-    print("Searching for turret address...")
-    local turretSignatures = {
-        { pattern = "c5 fb 10 47 ? 8b 7a ? 49 03 fe c5 fb 10 4f ? 48 bf", offset = 0x3, jump = 0x0, register = "RDI" },
-        { pattern = "c4 c1 7b ? ? 03 45 ? 64 24 ? 4d 03 e6 c4 c1 7b ? ? 24 ? 49 bc", offset = 0x3, jump = 0x0, register = "R15"},
-        { pattern = "c4 c1 73 ? ? 03 c5 fb 2c", offset = 0x3, jump = 0x0, register = "R8" },
-        { pattern = "c4 c1 7b ? ? 03 44 8b ? 27 4d 03 c6 c4 c1 7b ? ? 03 44 8b", offset = 0x3, jump = 0xD, register = "R8" },
-        { pattern = "c5 f9 2e d9 0f 8a 1c 00 00 00 0f 85 ? ? ? ? 41 83 f9 ? 0f 84 ? ? ? ? 49 8b c1", offset = 0x6, jump = 0xF, register = "RCX" },
-        { pattern = "c5 fb 58 c9 c4 c1 7b", offset = 0x3, jump = 0x4, register = "R9"}
-    }
 
-    local turretInstructionAddress = nil
-    local isBreakpointHit = false
-    local breakpointTimeout = 500  -- 500 milliseconds
+    local tAddr = nil
+    debug_setBreakpoint(tInstruction, function()
+        tAddr = ECX + 0x70
+        if (readDouble(tAddr) == 0) then
+            turretAddress = tAddr
+            print("Own turret address set to: " .. string.format("0x%X", turretAddress))
+            debug_removeBreakpoint(tInstruction)
+        end
+    end)
+end
 
-    for _, signature in ipairs(turretSignatures) do
-        isBreakpointHit = false  -- Reset the flag for each signature
-        local results = AOBScan(signature.pattern)
-        if results ~= nil then
-            turretInstructionAddress = getAddress(stringlist_getString(results, 0)) + signature.jump
-            print(string.format("Found turret instruction address: 0x%x", turretInstructionAddress))
-            local breakpointId = debug_setBreakpoint(
-                turretInstructionAddress,
-                function()
-                    isBreakpointHit = true
-                    if (isBreakpointHit) then
-                        print("Breakpoint hit.")
-                    end
-                    local potentialAddress = nil
-                    if signature.register == "R11" then
-                        potentialAddress = R11 + signature.offset
-                    elseif signature.register == "RCX" then
-                        potentialAddress = RCX + signature.offset
-                    elseif signature.register == "RDI" then
-                        potentialAddress = RDI + signature.offset
-                    elseif signature.register == "RDX" then
-                        potentialAddress = RDX + signature.offset
-                    elseif signature.register == "R8" then
-                        potentialAddress = R8 + signature.offset
-                    elseif signature.register == "R15" then
-                        potentialAddress = R15 + signature.offset
-                    elseif signature.register == "R9" then
-                        potentialAddress = R9 + signature.offset
-                    end
+function getTankOrientation()
+    print("Scanning for tank orientation")
+    local oResults = AOBScan("F3 0F 7E 4A 28 F2 0F 59 CA F2 0F 58 C1")
+    if (oResults == nil) then
+        print("Couldn't find tank orientation")
+        return
+    end
+    local oInstruction = getAddress(stringlist_getString(oResults, 0))
+    print("Found orientation instruction address: " .. string.format("0x%X", oInstruction))
 
-                    -- Check if the value at the potential address is 0
-                    if (readDouble(potentialAddress) == 0) then
-                        print(string.format("Found a potential address: 0x%X", potentialAddress))
-                        turretPositionAddress = potentialAddress
-                        print(string.format("Setting turret address: 0x%X", turretPositionAddress))
 
-                        debug_removeBreakpoint(turretInstructionAddress)  -- Remove the breakpoint after capturing the turretPositionAddress
-                    end
-                end
-            )
-            print(string.format("Turret position address set to: %x", turretPositionAddress))
-            isInitialized = true
-            local timerId = createTimer(nil, false)
-            timer_setInterval(timerId, breakpointTimeout)
-            timer_onTimer(timerId, function()
-                if not isBreakpointHit then
-                    print(string.format("Breakpoint at 0x%x not hit. Moving to next.", turretInstructionAddress))
-                    debug_removeBreakpoint(breakpointId)
-                    timerId.destroy()
-                    timerId = nil
-                else
-                    print("Breakpoint hit. Stopping timer.")
-                    timerId.destroy()
-                    timerId = nil
-                end
-            end)
-            timer_setEnabled(timerId, true)
+    local oAddr = nil
+    debug_setBreakpoint(oInstruction, function()
+            oAddr = EDX + 0x28
+            print(string.format("Found  orientation address: 0x%X", oAddr))
+            tankOrientationAddress = oAddr
+            sinOrientationAddress = tankOrientationAddress - 0x18
+            debug_removeBreakpoint(oInstruction)
+        end)
+end
 
-            if isBreakpointHit then
-                break  -- Found a valid breakpoint, so exit the loop
-            end
+function printEnemies()
+    if not enemyCoordinates then
+        print("Error: Enemy coordinates not initialized yet")
+        return
+    end
+
+    local enemyCount = 1;
+
+    local ownX = readDouble(ownBaseAddress)
+    local ownY = readDouble(ownBaseAddress + YOffset)
+    local ownZ = readDouble(ownBaseAddress + ZOffset)
+
+    for _, enemyAddress in ipairs(enemyCoordinates) do
+        local enemyX = readDouble(enemyAddress[1])
+        local enemyY = readDouble(enemyAddress[2])
+        local enemyZ = readDouble(enemyAddress[3])
+        local distance = math.sqrt((enemyX - ownX)^2 + (enemyY - ownY)^2 + (enemyZ - ownZ)^2)
+        print(string.format("Enemy %d: (%f, %f, %f) is %f away from you", enemyCount, enemyX, enemyY, enemyZ, distance))
+        enemyCount = enemyCount + 1
+    end
+end
+
+function normalize_angle(angle_in_radians)
+    local normalizedAngle = angle_in_radians
+    while (normalizedAngle > math.pi) do
+        normalizedAngle = normalizedAngle - 2 * math.pi
+    end
+    while (normalizedAngle < math.pi) do
+        normalizedAngle = normalizedAngle + 2 * math.pi
+    end
+    return normalizedAngle
+end
+
+function srtByDistance()
+    if not turretAddress or not ownBaseAddress then
+        print("Error: Turret or player coordinates not yet initialized!")
+        return
+    end
+
+    local ownX = readDouble(ownBaseAddress)
+    local ownY = readDouble(ownBaseAddress + YOffset)
+    local ownZ = readDouble(ownBaseAddress + ZOffset)
+
+    local distanceTable = {}
+
+    for index, enemyAddress in ipairs(enemyCoordinates) do
+        local enemyX = readDouble(enemyAddress[1])
+        local enemyY = readDouble(enemyAddress[2])
+        local enemyZ = readDouble(enemyAddress[3])
+
+        local distance = math.sqrt((enemyX - ownX)^2 + (enemyY - ownY)^2 + (enemyZ - ownZ)^2)
+
+        if distance >= 1 then 
+            table.insert(distanceTable, distance)
         end
     end
 
-    if turretInstructionAddress == nil then
-        print("No valid turret instruction address found.")
+    -- Sort both the enemyCoordinates and distanceTable based on distance
+    local sortedIndices = {}
+    for i = 1, #distanceTable do
+        sortedIndices[i] = i
     end
+
+    table.sort(sortedIndices, function(a, b) return distanceTable[a] < distanceTable[b] end)
+
+    local sortedEnemyCoordinates = {}
+    local sortedDistanceTable = {}
+    for i, index in ipairs(sortedIndices) do
+        table.insert(sortedEnemyCoordinates, enemyCoordinates[index])
+        table.insert(sortedDistanceTable, distanceTable[index])
+    end
+
+    enemyCoordinates = sortedEnemyCoordinates
+    distanceTable = sortedDistanceTable
 end
-
-function esp()
-
-    if (isNopped) then
-        writeBytes(highlightInstructionAddress, oldBytes)
-        isNopped = false
-        return
-    end
-    if (highlightInstructionAddress == nil) then
-        print("Couldn't find the ESP signature.")
-        return
-    end
-   --print(string.format("Found address at: %x", highlightInstructionAddress))
-    local numBytes = getInstructionSize(highlightInstructionAddress)
-    --print(string.format("The size of the instruction is: %d", numBytes))
-    oldBytes = readBytes(highlightInstructionAddress, numBytes, true)
-    local t = {}
-    for i = 1, numBytes, 1 do
-        t[i] = 0x90
-    end
-
-    writeBytes(highlightInstructionAddress, t)
-    isNopped = true
-end
-
-
-
-
-function getRedScan()
-
-    print("Searching for the red highlight scan...")
-    local results = AOBScan("45 8b 40 ? 4c 8b 4d ? 45 8b 59 ? 4d 03 de 41 bc ? ? ? ? 45 39 e3 0f 85 ? ? ? ? 45 8b 59")
-    if (results == nil) then
-        print("Couldn't find the red highlight signature.")
-        return
-    end
-    local breakpointHitCount = 0  -- Counter to keep track of the number of times the breakpoint is hit
-    local maxHits = 4
-    highlightInstructionAddress = getAddress(stringlist_getString(results, 0))
-    if (highlightInstructionAddress ~= nil) then
-       print(string.format("Found highlight instruction address: %0X", highlightInstructionAddress))
-    end
-end
-
-function getRedHighlight()
-    if (highlightInstructionAddress == nil) then
-        print("Couldn't find the red highlight instruction address")
+-- Compute the angle to the enemy players
+function calcAngle(currentEnemyIndex)
+    if not turretAddress or not ownBaseAddress then
+        print("Error: Turret or player coordinates not yet initialized!")
         return
     end
 
-    local maxHits = 30
-    local breakpointHitCount = 0
-    print("Obtaining the IG Aimbot value.. Make sure that you are aiming at someone")
-    local IGAimbotAddr = nil
-    local breakPointId = debug_setBreakpoint(highlightInstructionAddress, function()
-        breakpointHitCount = breakpointHitCount + 1
-        IGAimbotAddr = R8 + 0x33
-        if (readBytes(IGAimbotAddr, 1, true)[1] == 193) then
-            print(string.format("Captured a potential aimbot address: %0X", IGAimbotAddr))
-            table.insert(validAimAddresses, IGAimbotAddr)
-        end
-        if (breakpointHitCount >= 30) then
-            print("Breakpoint hit count exceeded. Ending the breakpoint.")
-            debug_removeBreakpoint(highlightInstructionAddress)
-        end
+    local ownX = readDouble(ownBaseAddress)
+    local ownY = readDouble(ownBaseAddress + YOffset)
+
+    local enemyX = readDouble(enemyCoordinates[currentEnemyIndex][1])
+    local enemyY = readDouble(enemyCoordinates[currentEnemyIndex][2])
+
+    local deltaX = enemyX - ownX
+    local deltaY = enemyY - ownY
+
+
+    local angleToEnemy = math.atan2(deltaY,deltaX)
+
+
+    local currentTankOrientationCosValue = readDouble(tankOrientationAddress)
+    local currentTankOrientationSinValue = readDouble(sinOrientationAddress)
+
+    local tankOrientationAngleCos = math.acos(currentTankOrientationCosValue)
+    local tankOrientationAngleSin = math.asin(currentTankOrientationSinValue)
+
+    local quadrant = 0
+    if currentTankOrientationCosValue > 0 and currentTankOrientationSinValue > 0 then
+        quadrant = 1
+    elseif currentTankOrientationCosValue < 0 and currentTankOrientationSinValue > 0 then
+        quadrant = 2
+    elseif currentTankOrientationCosValue < 0 and currentTankOrientationSinValue < 0 then
+        quadrant = 3
+    elseif currentTankOrientationCosValue > 0 and currentTankOrientationSinValue < 0 then
+        quadrant = 4
     end
-    )
+
+    local effectiveAimAngle = 0
+
+    if quadrant == 1 or quadrant == 2 then
+        effectiveAimAngle = angleToEnemy + 2 * tankOrientationAngleCos
+    elseif quadrant == 3 or quadrant == 4 then
+        effectiveAimAngle = angleToEnemy + 2 * -tankOrientationAngleCos
+    end
+
+    effectiveAimAngle = effectiveAimAngle + math.pi/2
+
+    effectiveAimAngle = normalize_angle(effectiveAimAngle)
+
+    return effectiveAimAngle
 end
 
-
-
-function aimAssist()
-    -- Debug: Print all addresses in validAimAddresses
-    for i, address in ipairs(validAimAddresses) do
-        print(string.format("Address %d: 0x%X", i, address))
-    end
-
-    -- Debug: Check if turretPositionAddress and redHighlightAddress are initialized
-    if turretPositionAddress == nil or redHighlightAddress == nil then
-        print("Error: Turret position or red highlight address not initialized.")
+function aimbot()
+    if not turretAddress then
+        print("Turret address is not initialized.")
         return
-    else
-        print(string.format("Turret Position: 0x%X, Red Highlight: 0x%X", turretPositionAddress, redHighlightAddress))
     end
 
-for i, address in ipairs(validAimAddresses) do
-    local redHighlightValueTable = readBytes(address, 1, true)
-    if redHighlightValueTable then
-        local redHighlightValue = redHighlightValueTable[1]
-              print(redHighlightValue);
-    end
-end
+    srtByDistance()
 
-    if turretPositionAddress == nil or redHighlightAddress == nil then
-        print("Error: Turret position or red highlight address not initialized.")
-        return
-    end
+    local finalAngle = calcAngle(currentEnemyIndex)
 
-    local currentTurretPosition = readDouble(turretPositionAddress)
-    local step = 0.00005  -- Incremental step for scanning; you can adjust this as needed
-    local targetFound = false
-
-    local radians15 = 15 * (math.pi / 180)  -- 15 degrees converted to radians
-
-    --print("Starting aim assist from position: " .. currentTurretPosition)
-
-    -- Scan 15 degrees (0.2618 radians) to the left
-    for angle = currentTurretPosition, currentTurretPosition - radians15, -step do
-        writeDouble(turretPositionAddress, angle)
-        local redHighlightValue = readBytes(validAimAddresses[1], 1, true)[1]
-
-        --print("Debug: redHighlightValue is " .. tostring(redHighlightValue))  -- Debug print
-
-        if redHighlightValue == 193 then
-           -- print("Target locked at angle: " .. angle)
-            targetFound = true
-            break
-        end
-    end
-
-
-    -- If target is not found, scan 15 degrees (0.2618 radians) to the right
-    if not targetFound then
-        for angle = currentTurretPosition, currentTurretPosition + radians15, step do
-            writeDouble(turretPositionAddress, angle)
-            local redHighlightValueTable = readBytes(validAimAddresses, 1, true)
-            local redHighlightValue = redHighlightValueTable[1]
-
-
-
-            --print("Debug: redHighlightValue is " .. tostring(redHighlightValue))  -- Debug print
-
-            if redHighlightValue == 193 then
-                --print("Target locked at angle: " .. angle)
-                targetFound = true
-                break
-            end
-        end
-    end
-
-    if not targetFound then
-        --print("No target found within 15 degrees.")
-    end
+    writeDouble(turretAddress, finalAngle)
 end
 
 
-
-function checkForKeyPressH()
-    local VK_LSHIFT = 0xA0  -- Aim Assist
-    local VK_CTRL = 0xA2 -- ESP
-    if isKeyPressed(VK_LSHIFT) then
-        aimAssist()
-    end
-    if isKeyPressed(VK_CTRL) then
-        esp()
-    end
-end
 
 function checkForKeyPress()
-    local VK_1 = 0x31  -- ASCII for "1"
-    local VK_2 = 0x32  -- ASCII for "2"
+    local VK_LSHIFT = 0xA0
+    local VK_TAB = 0x09
+    local VK_CAPS = 0x14
 
-    if isKeyPressed(VK_1) then
-        getTurretAddress()
+    if isKeyPressed(VK_LSHIFT) then
+        aimbot()
+    elseif isKeyPressed(VK_CAPS) then
+       if (currentEnemyIndex > #enemyCoordinates) then
+            currentEnemyIndex = 1
+            return
+       end
+       currentEnemyIndex = currentEnemyIndex + 1
     end
 
-    if isKeyPressed(VK_2) then
-        getRedHighlight()
-    end
 end
 
-function setUpScanningTimer()
-    local timerInterval = 300  -- Check every 300ms
-    timerObj = createTimer(nil)
-    timer_onTimer(timerObj, checkForKeyPress)
-    timer_setInterval(timerObj, timerInterval)
-    timer_setEnabled(timerObj, true)
+function setupTimers()
+    -- Timer for checking key press
+    local timerInterval = 1  
+    local keypressTimer = createTimer(nil)
+    timer_onTimer(keypressTimer, checkForKeyPress)
+    timer_setInterval(keypressTimer, timerInterval)
+    timer_setEnabled(keypressTimer, true)
+
 end
 
-function setupHotkeyWithTimer()
-    local timerInterval = 300 -- Check every 300ms
-    timerObj = createTimer(nil)
-    timer_onTimer(timerObj, checkForKeyPressH)
-    timer_setInterval(timerObj, timerInterval)
-    timer_setEnabled(timerObj, true)
-end
-
--- Start script execution
-getRedScan()
-setUpScanningTimer()
-setupHotkeyWithTimer()
+getTankOrientation()
+getOwnCoordinates()
+getEnemyCoordinates()
+getTurretAddress()
+setupTimers()
